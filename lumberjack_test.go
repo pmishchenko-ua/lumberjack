@@ -20,7 +20,7 @@ import (
 // Since all the tests uses the time to determine filenames etc, we need to
 // control the wall clock as much as possible, which means having a wall clock
 // that doesn't change unless we want it to.
-var fakeCurrentTime = time.Now() 
+var fakeCurrentTime = time.Now()
 
 func fakeTime() time.Time {
 	return fakeCurrentTime
@@ -167,8 +167,8 @@ func TestAutoRotateByTime(t *testing.T) {
 
 	filename := logFile(dir)
 	l := New(LoggerOptions{
-		Filename: filename,
-		MaxLifetime:  1,
+		Filename:    filename,
+		MaxLifetime: 1,
 	})
 	defer l.Close()
 	b := []byte("boo!")
@@ -726,7 +726,7 @@ func TestJson(t *testing.T) {
 	isNil(err, t)
 	equals("foo", l.Filename, t)
 	equals(int64(5), l.MaxSize, t)
-	equals(10, l.MaxAge, t)
+	equals(int64(10), l.MaxAge, t)
 	equals(3, l.MaxBackups, t)
 	equals(true, l.LocalTime, t)
 	equals(true, l.Compress, t)
@@ -760,11 +760,11 @@ func logFile(dir string) string {
 }
 
 func backupFile(dir string) string {
-	return filepath.Join(dir, "foobar.log_" + fakeTime().UTC().Format(backupTimeFormat))
+	return filepath.Join(dir, "foobar.log_"+fakeTime().UTC().Format(backupTimeFormat))
 }
 
 func backupFileLocal(dir string) string {
-	return filepath.Join(dir, "foobar.log_" + fakeTime().Format(backupTimeFormat))
+	return filepath.Join(dir, "foobar.log_"+fakeTime().Format(backupTimeFormat))
 }
 
 // fileCount checks that the number of files in the directory is exp.

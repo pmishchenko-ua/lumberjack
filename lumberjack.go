@@ -64,7 +64,7 @@ var _ io.WriteCloser = (*Logger)(nil)
 // `/var/log/foo/server.log`, a backup created at 6:30pm on Nov 11 2016 would
 // use the filename `/var/log/foo/server-2016-11-04T18-30-00.000.log`
 //
-// Cleaning Up Old Log Files
+// # Cleaning Up Old Log Files
 //
 // Whenever a new logfile gets created, old log files may be deleted.  The most
 // recent files according to the encoded timestamp will be retained, up to a
@@ -73,7 +73,7 @@ var _ io.WriteCloser = (*Logger)(nil)
 // MaxBackups.  Note that the time encoded in the timestamp is the rotation
 // time, which may differ from the last time that file was written to.
 //
-// If MaxBackups and MaxAge are both 0, no old log files will be deleted.
+// If MaxBackups, MaxRetentionSize and MaxAge are all 0, no old log files will be deleted.
 type Logger struct {
 	// Filename is the file to write logs to.  Backup log files will be retained
 	// in the same directory.  It uses <processname>-lumberjack.log in
@@ -87,17 +87,20 @@ type Logger struct {
 	// MaxLifetime is the time threshold (in seconds) for tracelog file rotation
 	MaxLifetime int64 `json:"maxlifetime" yaml:"maxlifetime"`
 
-	// MaxAge is the maximum number of days to retain old log files based on the
+	// MaxAge is the maximum number of seconds to retain old log files based on the
 	// timestamp encoded in their filename.  Note that a day is defined as 24
 	// hours and may not exactly correspond to calendar days due to daylight
 	// savings, leap seconds, etc. The default is not to remove old log files
 	// based on age.
-	MaxAge int `json:"maxage" yaml:"maxage"`
+	MaxAge int64 `json:"maxage" yaml:"maxage"`
 
 	// MaxBackups is the maximum number of old log files to retain.  The default
 	// is to retain all old log files (though MaxAge may still cause them to get
 	// deleted.)
 	MaxBackups int `json:"maxbackups" yaml:"maxbackups"`
+
+	// MaxRetentionSize is the maximum total size (in bytes) of log files to retain
+	MaxRetentionSize int64 `json:"maxretentionsize" yaml:"maxretentionsize"`
 
 	// LocalTime determines if the time used for formatting the timestamps in
 	// backup files is the computer's local time.  The default is to use UTC
@@ -112,9 +115,9 @@ type Logger struct {
 	file *os.File
 	mu   sync.Mutex
 
-	millCh        chan bool
-	startMill     sync.Once
-	lastRotation  time.Time
+	millCh       chan bool
+	startMill    sync.Once
+	lastRotation time.Time
 }
 
 var (
@@ -138,17 +141,20 @@ type LoggerOptions struct {
 	// MaxLifetime is the time threshold (in seconds) for tracelog file rotation
 	MaxLifetime int64 `json:"maxlifetime" yaml:"maxlifetime"`
 
-	// MaxAge is the maximum number of days to retain old log files based on the
+	// MaxAge is the maximum number of seconds to retain old log files based on the
 	// timestamp encoded in their filename.  Note that a day is defined as 24
 	// hours and may not exactly correspond to calendar days due to daylight
 	// savings, leap seconds, etc. The default is not to remove old log files
 	// based on age.
-	MaxAge int `json:"maxage" yaml:"maxage"`
+	MaxAge int64 `json:"maxage" yaml:"maxage"`
 
 	// MaxBackups is the maximum number of old log files to retain.  The default
 	// is to retain all old log files (though MaxAge may still cause them to get
 	// deleted.)
 	MaxBackups int `json:"maxbackups" yaml:"maxbackups"`
+
+	// MaxRetentionSize is the maximum total size (in bytes) of log files to retain
+	MaxRetentionSize int64 `json:"maxretentionsize" yaml:"maxretentionsize"`
 
 	// LocalTime determines if the time used for formatting the timestamps in
 	// backup files is the computer's local time.  The default is to use UTC
@@ -162,13 +168,14 @@ type LoggerOptions struct {
 
 func New(opts LoggerOptions) *Logger {
 	l := Logger{
-		Filename: opts.Filename,
-		MaxSize: opts.MaxSize,
-		MaxLifetime: opts.MaxLifetime,
-		MaxAge: opts.MaxAge,
-		MaxBackups: opts.MaxBackups,
-		LocalTime: opts.LocalTime,
-		Compress: opts.Compress,
+		Filename:         opts.Filename,
+		MaxSize:          opts.MaxSize,
+		MaxLifetime:      opts.MaxLifetime,
+		MaxAge:           opts.MaxAge,
+		MaxBackups:       opts.MaxBackups,
+		MaxRetentionSize: opts.MaxRetentionSize,
+		LocalTime:        opts.LocalTime,
+		Compress:         opts.Compress,
 	}
 	t := currentTime()
 	if !l.LocalTime {
@@ -209,7 +216,7 @@ func (l *Logger) Write(p []byte) (n int, err error) {
 	}
 
 	if l.MaxLifetime != 0 && currentTime().After(
-		l.lastRotation.Add(time.Duration(l.MaxLifetime * int64(time.Second)))) {
+		l.lastRotation.Add(time.Duration(l.MaxLifetime*int64(time.Second)))) {
 		if err := l.rotate(); err != nil {
 			return 0, err
 		}
@@ -374,7 +381,7 @@ func (l *Logger) filename() string {
 // files are removed, keeping at most l.MaxBackups files, as long as
 // none of them are older than MaxAge.
 func (l *Logger) millRunOnce() error {
-	if l.MaxBackups == 0 && l.MaxAge == 0 && !l.Compress {
+	if l.MaxBackups == 0 && l.MaxRetentionSize == 0 && l.MaxAge == 0 && !l.Compress {
 		return nil
 	}
 
@@ -385,8 +392,9 @@ func (l *Logger) millRunOnce() error {
 
 	var compress, remove []logInfo
 
-	if l.MaxBackups > 0 && l.MaxBackups < len(files) {
+	if (l.MaxBackups > 0 && l.MaxBackups < len(files)) || (l.MaxRetentionSize > 0) {
 		preserved := make(map[string]bool)
+		totalSize := int64(0)
 		var remaining []logInfo
 		for _, f := range files {
 			// Only count the uncompressed log file or the
@@ -394,8 +402,12 @@ func (l *Logger) millRunOnce() error {
 			fn := f.Name()
 			fn = strings.TrimSuffix(fn, compressSuffix)
 			preserved[fn] = true
-
-			if len(preserved) > l.MaxBackups {
+			if l.MaxRetentionSize > 0 {
+				if fileInfo, err := f.Info(); err == nil {
+					totalSize += fileInfo.Size()
+				}
+			}
+			if (len(preserved) > l.MaxBackups) || (totalSize > int64(l.MaxRetentionSize)) {
 				remove = append(remove, f)
 			} else {
 				remaining = append(remaining, f)
@@ -404,7 +416,7 @@ func (l *Logger) millRunOnce() error {
 		files = remaining
 	}
 	if l.MaxAge > 0 {
-		diff := time.Duration(int64(24*time.Hour) * int64(l.MaxAge))
+		diff := time.Duration(int64(time.Second) * int64(l.MaxAge))
 		cutoff := currentTime().Add(-1 * diff)
 
 		var remaining []logInfo
