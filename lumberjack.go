@@ -37,7 +37,6 @@ import (
 const (
 	backupTimeFormat = "2006-01-02_15-04-05.000"
 	compressSuffix   = ".gz"
-	defaultMaxSize   = 100 * 1024 * 1024
 )
 
 // ensure we always implement io.WriteCloser
@@ -191,9 +190,9 @@ func (l *Logger) Write(p []byte) (n int, err error) {
 	defer l.mu.Unlock()
 
 	writeLen := int64(len(p))
-	if writeLen > l.max() {
+	if (l.MaxSize > 0) && (writeLen > l.MaxSize) {
 		return 0, fmt.Errorf(
-			"write length %d exceeds maximum file size %d", writeLen, l.max(),
+			"write length %d exceeds maximum file size %d", writeLen, l.MaxSize,
 		)
 	}
 
@@ -203,7 +202,7 @@ func (l *Logger) Write(p []byte) (n int, err error) {
 		}
 	}
 
-	if l.size+writeLen > l.max() {
+	if (l.MaxSize > 0) && (l.size+writeLen > l.MaxSize) {
 		if err := l.rotate(); err != nil {
 			return 0, err
 		}
@@ -346,7 +345,7 @@ func (l *Logger) openExistingOrNew(writeLen int) error {
 		return fmt.Errorf("error getting log file info: %s", err)
 	}
 
-	if info.Size()+int64(writeLen) >= l.max() {
+	if (l.MaxSize > 0) && (info.Size()+int64(writeLen) >= l.MaxSize) {
 		return l.rotate()
 	}
 
@@ -490,14 +489,6 @@ func (l *Logger) oldLogFiles() ([]logInfo, error) {
 	sort.Sort(byFormatTime(logFiles))
 
 	return logFiles, nil
-}
-
-// max returns the maximum size in bytes of log files before rolling.
-func (l *Logger) max() int64 {
-	if l.MaxSize == 0 {
-		return defaultMaxSize
-	}
-	return l.MaxSize
 }
 
 // dir returns the directory for the current filename.
