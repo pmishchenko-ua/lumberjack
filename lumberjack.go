@@ -394,7 +394,7 @@ func (l *Logger) millRunOnce() error {
 
 	if (l.MaxBackups > 0 && l.MaxBackups < len(files)) || (l.MaxRetentionSize > 0) {
 		preserved := make(map[string]bool)
-		totalSize := int64(0)
+		totalSize := l.size
 		var remaining []logInfo
 		for _, f := range files {
 			// Only count the uncompressed log file or the
@@ -407,7 +407,7 @@ func (l *Logger) millRunOnce() error {
 					totalSize += fileInfo.Size()
 				}
 			}
-			if (len(preserved) > l.MaxBackups) || (totalSize > int64(l.MaxRetentionSize)) {
+			if (l.MaxBackups > 0 && len(preserved) > l.MaxBackups) || (l.MaxRetentionSize > 0 && totalSize > int64(l.MaxRetentionSize)) {
 				remove = append(remove, f)
 			} else {
 				remaining = append(remaining, f)

@@ -350,6 +350,71 @@ func TestMaxBackups(t *testing.T) {
 	exists(notlogfiledir, t)
 }
 
+func TestMaxRetentionSize(t *testing.T) {
+	currentTime = fakeTime
+	dir := makeTempDir("TestMaxRetentionSize", t)
+	defer os.RemoveAll(dir)
+
+	filename := logFile(dir)
+	l := New(LoggerOptions{
+		Filename:   filename,
+		MaxSize:    10,
+		MaxRetentionSize: 12,
+	})
+	defer l.Close()
+	b := []byte("12345")
+	n, err := l.Write(b)
+	isNil(err, t)
+	equals(len(b), n, t)
+
+	existsWithContent(filename, b, t)
+	fileCount(dir, 1, t)
+
+	newFakeTime()
+
+	// this will put us over the max size
+	b2 := []byte("1234567")
+	n, err = l.Write(b2)
+	isNil(err, t)
+	equals(len(b2), n, t)
+
+	// this will use the new fake time
+	secondFilename := backupFile(dir)
+	existsWithContent(secondFilename, b, t)
+
+	// make sure the old file still exists with the same content.
+	existsWithContent(filename, b2, t)
+
+	fileCount(dir, 2, t)
+
+	newFakeTime()
+
+	// this will make us rotate again
+	b3 := []byte("12345")
+	n, err = l.Write(b3)
+	isNil(err, t)
+	equals(len(b3), n, t)
+
+	// this will use the new fake time
+	thirdFilename := backupFile(dir)
+	existsWithContent(thirdFilename, b2, t)
+
+	existsWithContent(filename, b3, t)
+
+	// we need to wait a little bit since the files get deleted on a different
+	// goroutine (so this test moght be flacky)
+	<-time.After(time.Millisecond * 100)
+
+	// should only have two files in the dir still
+	fileCount(dir, 2, t)
+
+	// second file name should still exist
+	existsWithContent(thirdFilename, b2, t)
+
+	// should have deleted the first backup
+	notExist(secondFilename, t)
+}
+
 func TestCleanupExistingBackups(t *testing.T) {
 	// test that if we start with more backup files than we're supposed to have
 	// in total, that extra ones get cleaned up when we rotate.
