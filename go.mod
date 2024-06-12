@@ -1,3 +1,3 @@
-module gopkg.in/natefinch/lumberjack.v2
+module github.com/pmishchenko-ua/lumberjack
 
-go 1.13
+go 1.20
